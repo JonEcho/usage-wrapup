@@ -8,14 +8,22 @@ const LABEL: Record<string, string> = {
 
 type Low = { kind: string; left: number; resetsAt?: string }
 
-/** The window with the least left, when it is at or below the threshold. */
-export function lowest(limits: readonly SessionRateLimit[], threshold: number): Low | undefined {
+export const DEFAULT_PERCENT_LEFT = 5
+export const DEFAULT_WEEKLY_PERCENT_LEFT = 1
+
+/** The window with the least left among those at or below their own percent-left threshold. */
+export function lowest(
+  limits: readonly SessionRateLimit[],
+  thresholdByKind: Readonly<Record<string, number>>,
+): Low | undefined {
   let worst: Low | undefined
   for (const l of limits) {
+    const threshold = thresholdByKind[l.kind]
     const left = Math.max(0, Math.round((100 - l.percentUsed) * 10) / 10)
+    if (threshold === undefined || left > threshold) continue
     if (!worst || left < worst.left) worst = { kind: l.kind, left, resetsAt: l.resetsAt }
   }
-  return worst && worst.left <= threshold ? worst : undefined
+  return worst
 }
 
 function describe(low: Low): string {
@@ -36,13 +44,18 @@ export function wrapUpNote(low: Low): string {
 }
 
 export const register: Register = (on, options) => {
-  const threshold = Number(options.threshold ?? 5)
+  const percentLeft = Number(options.threshold ?? DEFAULT_PERCENT_LEFT)
+  const thresholdByKind = {
+    five_hour: percentLeft,
+    seven_day: Number(options.weeklyThreshold ?? DEFAULT_WEEKLY_PERCENT_LEFT),
+    spend_limit: percentLeft,
+  }
   let limits: readonly SessionRateLimit[] | undefined
   let warned = false
 
   on('session.measure', ($, e, next) => {
     limits = e.rateLimits
-    const low = lowest(limits, threshold)
+    const low = lowest(limits, thresholdByKind)
     $.ui.status(low ? `⚠ ${low.left}% left — wrapping up` : undefined)
     if (low && !warned) $.ui.toast(`usage-wrapup: ${describe(low)} Agents told to wrap up.`)
     warned = !!low
@@ -60,7 +73,7 @@ export const register: Register = (on, options) => {
         limits = []
       }
     }
-    const low = lowest(limits, threshold)
+    const low = lowest(limits, thresholdByKind)
     if (!low) return ran
     return { ...ran, context: [...(ran.context ?? []), wrapUpNote(low)] }
   })

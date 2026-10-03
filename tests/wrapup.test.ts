@@ -46,3 +46,41 @@ test('threshold is configurable', { options: { threshold: 20 } }, async ($, on) 
   const r = await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
   expect(((r as { context?: string[] }).context ?? []).join('\n')).toMatch(/15% left/)
 })
+
+const measureWindow = (kind: string, percentUsed: number) => ({
+  context: { window: 200000 },
+  rateLimits: [{ kind, percentUsed }],
+  changed: ['rateLimits' as const],
+})
+
+test('no note while the weekly window has more than 1% left', async ($, on) => {
+  engine(on)
+  await $.session.measure(measureWindow('seven_day', 95))
+  const r = await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect((r as { context?: string[] }).context ?? []).toHaveLength(0)
+})
+
+test('tool results carry the note once the weekly window is 99% used', async ($, on) => {
+  engine(on)
+  await $.session.measure(measureWindow('seven_day', 99))
+  const r = await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(((r as { context?: string[] }).context ?? []).join('\n')).toMatch(/weekly usage limit: only 1% left/)
+})
+
+test('the 5-hour note still fires when the weekly window is low but above its threshold', async ($, on) => {
+  engine(on)
+  await $.session.measure({
+    context: { window: 200000 },
+    rateLimits: [{ kind: 'seven_day', percentUsed: 97 }, { kind: 'five_hour', percentUsed: 95 }],
+    changed: ['rateLimits' as const],
+  })
+  const r = await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(((r as { context?: string[] }).context ?? []).join('\n')).toMatch(/5-hour usage limit: only 5% left/)
+})
+
+test('weekly threshold is configurable', { options: { weeklyThreshold: 10 } }, async ($, on) => {
+  engine(on)
+  await $.session.measure(measureWindow('seven_day', 92))
+  const r = await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(((r as { context?: string[] }).context ?? []).join('\n')).toMatch(/weekly usage limit: only 8% left/)
+})
